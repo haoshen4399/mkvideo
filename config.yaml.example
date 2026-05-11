@@ -169,7 +169,11 @@ steps:
     font_name: Arial
     font_size: 34
     dynamic_position_enabled: true
-    dynamic_font_anchor_ratio: 1.0
+    dynamic_font_anchor_ratio: 1.55
+    dynamic_source_bottom_pad_ratio: 2.2
+    dynamic_source_expected_y2_tolerance_ratio: 0.02
+    dynamic_min_source_band_height_px: 28
+    dynamic_thin_band_bottom_pad_ratio: 2.2
     dynamic_min_y_ratio: 0.50
     dynamic_max_y_ratio: 0.82
     overwrite: false
@@ -199,6 +203,12 @@ steps:
     min_subtitle_gap_ratio: 0.015
     max_subtitle_gap_ratio: 0.045
     max_subtitle_gap_px: 58
+    source_visual_bottom_pad_ratio: 0.06
+    source_visual_thin_band_height_px: 28
+    source_visual_thin_band_extra_pad_ratio: 0.025
+    source_visual_expected_y2_tolerance_ratio: 0.02
+    primary_source_max_y2_ratio: 0.76
+    primary_source_expected_y2_tolerance_ratio: 0.09
     edge_margin_px: 8
     require_original_subtitle_evidence: true
     visual_subtitle_min_y_ratio: 0.50

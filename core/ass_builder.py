@@ -75,7 +75,18 @@ def _dynamic_event_positions(
             band = _detect_original_subtitle_band(frame, detector_config)
             if not band:
                 continue
-            target_y = band["y2"] + gap + int(font_size * float(step_config.get("dynamic_font_anchor_ratio", 1.0)))
+            source_bottom = band["y2"] + int(font_size * float(step_config.get("dynamic_source_bottom_pad_ratio", 2.2)))
+            if band.get("height", 0) < int(step_config.get("dynamic_min_source_band_height_px", 28)):
+                source_bottom += int(font_size * float(step_config.get("dynamic_thin_band_bottom_pad_ratio", 2.2)))
+            detected_bbox = position.get("detected_original_subtitle_bbox") or {}
+            detected_y2 = detected_bbox.get("y2")
+            if detected_y2:
+                tolerance = int(height * float(step_config.get("dynamic_source_expected_y2_tolerance_ratio", 0.02)))
+                expected_bottom = int(detected_y2) + tolerance
+                source_bottom = expected_bottom if band["y2"] > expected_bottom else max(band["y2"], min(source_bottom, expected_bottom))
+            else:
+                source_bottom = max(band["y2"], source_bottom)
+            target_y = source_bottom + gap + int(font_size * float(step_config.get("dynamic_font_anchor_ratio", 1.55)))
             target_y = max(min_y, min(max_y, target_y))
             positions[idx] = f"{{\\an2\\pos({width // 2},{target_y})}}"
     finally:
