@@ -6,7 +6,12 @@ app:
   ffprobe_path: "D:/ffmpeg/bin/ffprobe.exe"
   keep_intermediate: true
   max_video_minutes: 10
+  # When true, a successful step reruns if its own config/provider config changes.
   resume: true
+  rerun_on_config_change: true
+  # When a step reruns, downstream steps rerun too because their artifacts depend on it.
+  cascade_on_step_rerun: true
+  # Debug controls. Use these to run a partial pipeline without changing code.
   start_from:
   stop_after:
   only_steps: []
@@ -22,6 +27,32 @@ llm_providers:
     max_retries: 2
     retry_backoff_seconds: 2
     temperature: 0.2
+
+  vision:
+    type: openai_compatible
+    base_url: "https://openai.5054399.com/aliyun/compatible-mode/v1"
+    api_key_env: "VISION_API_KEY"
+    default_model: "qwen3.6-plus-2026-04-02"
+    timeout: 180
+    max_retries: 2
+    retry_backoff_seconds: 2
+    temperature: 0.2
+
+  vision_fallback:
+    type: openai_compatible
+    base_url: "https://openai.5054399.com/moonshot/v1"
+    api_key_env: "VISION_FALLBACK_API_KEY"
+    default_model: "kimi-k2.6"
+    timeout: 180
+    max_retries: 2
+    retry_backoff_seconds: 2
+    temperature: 0.2
+
+vision:
+  vision_base_url: "https://openai.5054399.com/aliyun/compatible-mode/v1"
+  vision_model: "qwen3.6-plus-2026-04-02"
+  vision_fallback_base_url: "https://openai.5054399.com/moonshot/v1"
+  vision_fallback_model: "kimi-k2.6"
 
 steps:
   probe_video:
@@ -48,17 +79,10 @@ steps:
     fallback_model: large-v3
     download_root: models/whisper
     language: zh
-    device: auto
-    compute_type: auto
+    device: cpu
+    compute_type: int8
     beam_size: 5
     condition_on_previous_text: false
-    vad_filter: true
-    vad_engine: silero
-    vad_threshold: 0.5
-    strict_vad: true
-    vad_min_silence_duration_ms: 300
-    vad_speech_pad_ms: 120
-    vad_merge_gap_seconds: 4.0
     word_timestamps: true
     fp16: false
     temperature: [0.0]

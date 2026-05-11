@@ -6,7 +6,12 @@ app:
   ffprobe_path: "D:/ffmpeg/bin/ffprobe.exe"
   keep_intermediate: true
   max_video_minutes: 10
+  # When true, a successful step reruns if its own config/provider config changes.
   resume: true
+  rerun_on_config_change: true
+  # When a step reruns, downstream steps rerun too because their artifacts depend on it.
+  cascade_on_step_rerun: true
+  # Debug controls. Use these to run a partial pipeline without changing code.
   start_from:
   stop_after:
   only_steps: []

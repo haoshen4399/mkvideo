@@ -23,6 +23,7 @@ class TaskState:
                 "steps": {step: "pending" for step in steps},
                 "artifacts": {},
                 "errors": {},
+                "config_hashes": {},
                 "updated_at": None,
             }
             self.save()
@@ -40,12 +41,17 @@ class TaskState:
         self.data["steps"][step] = "running"
         self.save()
 
-    def mark_success(self, step: str, artifacts: dict[str, str] | None = None) -> None:
+    def mark_success(self, step: str, artifacts: dict[str, str] | None = None, config_hash: str | None = None) -> None:
         self.data["steps"][step] = "success"
         self.data["last_success_step"] = step
         if artifacts:
             self.data["artifacts"][step] = artifacts
+        if config_hash:
+            self.data.setdefault("config_hashes", {})[step] = config_hash
         self.save()
+
+    def step_config_hash(self, step: str) -> str | None:
+        return self.data.get("config_hashes", {}).get(step)
 
     def mark_failed(self, step: str, error: Exception) -> None:
         self.data["status"] = "failed"

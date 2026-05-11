@@ -1,5 +1,7 @@
 from pathlib import Path
 from typing import Any, Callable
+import hashlib
+import json
 
 from loguru import logger
 
@@ -50,6 +52,11 @@ class Pipeline:
         self.stop_after = stop_after
         self.only_steps = set(only_steps or [])
         self.overwrite_steps = set(overwrite_steps or [])
+        app_config = config.get("app", {})
+        self.rerun_on_config_change = bool(app_config.get("rerun_on_config_change", True))
+        self.cascade_on_step_rerun = bool(app_config.get("cascade_on_step_rerun", True))
+        self._upstream_reran = False
+        self._forced_rerun_steps: dict[str, bool] = {}
         for step in self.overwrite_steps:
             self.config.setdefault("steps", {}).setdefault(step, {})["overwrite"] = True
         self.state = TaskState(context.task_state_path, context.input_video, self.STEP_ORDER)
@@ -84,6 +91,8 @@ class Pipeline:
                 logger.info("Skip successful step: {}", step)
                 continue
             self._run_step(step)
+            if self.cascade_on_step_rerun:
+                self._upstream_reran = True
             if self.stop_after and step == self.stop_after:
                 logger.info("Stop after configured step: {}", step)
                 break
@@ -100,10 +109,16 @@ class Pipeline:
         try:
             artifacts = self.handlers[step](self.context, self.config)
         except Exception as exc:
+            self._restore_forced_step_overwrite(step)
             logger.exception("Step failed: {}", step)
             self.state.mark_failed(step, exc)
             raise
-        self.state.mark_success(step, {key: str(value) for key, value in artifacts.items()})
+        self.state.mark_success(
+            step,
+            {key: str(value) for key, value in artifacts.items()},
+            config_hash=self._step_config_hash(step),
+        )
+        self._restore_forced_step_overwrite(step)
         logger.success("Step completed: {}", step)
 
     def _should_skip(self, step: str) -> bool:
@@ -114,7 +129,70 @@ class Pipeline:
         step_config = self.config.get("steps", {}).get(step, {})
         if step_config.get("overwrite", False):
             return False
+        if self._upstream_reran and self.cascade_on_step_rerun:
+            logger.info("Rerun dependent step after upstream change: {}", step)
+            self._force_step_overwrite(step)
+            return False
+        if self.rerun_on_config_change and self.state.step_config_hash(step) != self._step_config_hash(step):
+            logger.info("Rerun step because config changed: {}", step)
+            self._force_step_overwrite(step)
+            return False
         return self.state.step_status(step) == "success"
 
     def _is_enabled(self, step: str) -> bool:
         return self.config.get("steps", {}).get(step, {}).get("enabled", True)
+
+    def _force_step_overwrite(self, step: str) -> None:
+        step_config = self.config.setdefault("steps", {}).setdefault(step, {})
+        if step not in self._forced_rerun_steps:
+            self._forced_rerun_steps[step] = bool(step_config.get("overwrite", False))
+        step_config["overwrite"] = True
+
+    def _restore_forced_step_overwrite(self, step: str) -> None:
+        if step not in self._forced_rerun_steps:
+            return
+        self.config.setdefault("steps", {}).setdefault(step, {})["overwrite"] = self._forced_rerun_steps.pop(step)
+
+    def _step_config_hash(self, step: str) -> str:
+        payload = {
+            "step": step,
+            "step_config": self._functional_step_config(step),
+            "provider_config": self._provider_config_for_step(step),
+            "prompt_hash": self._prompt_hash_for_step(step),
+            "pipeline_version": 2,
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _provider_config_for_step(self, step: str) -> dict[str, Any] | None:
+        step_config = self.config.get("steps", {}).get(step, {})
+        provider_names = [step_config.get("provider"), step_config.get("fallback_provider")]
+        providers = self.config.get("llm_providers", {})
+        selected = {}
+        for name in provider_names:
+            if name and name in providers:
+                selected[name] = self._redact_provider_config(providers[name])
+        return selected or None
+
+    def _functional_step_config(self, step: str) -> dict[str, Any]:
+        step_config = dict(self.config.get("steps", {}).get(step, {}))
+        step_config.pop("overwrite", None)
+        return step_config
+
+    def _prompt_hash_for_step(self, step: str) -> str | None:
+        prompt_path = self.config.get("steps", {}).get(step, {}).get("prompt_path")
+        if not prompt_path:
+            return None
+        path = Path(prompt_path)
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        if not path.exists():
+            return None
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    @staticmethod
+    def _redact_provider_config(provider: dict[str, Any]) -> dict[str, Any]:
+        redacted = dict(provider)
+        if redacted.get("api_key"):
+            redacted["api_key"] = "***REDACTED***"
+        return redacted
