@@ -308,12 +308,24 @@ def _analyze_frame_pair_with_opencv(
             if not overlap and band["y1"] >= english_bbox["y2"]:
                 continue
             gap = min(abs(english_bbox["y1"] - band["y2"]), abs(band["y1"] - english_bbox["y2"]))
-            if overlap or gap < min_gap:
+            band_center_x = (band["x1"] + band["x2"]) / 2
+            centered_band = abs(band_center_x - width / 2) <= width * float(
+                step_config.get("source_subtitle_center_tolerance_ratio", 0.18)
+            )
+            if overlap and centered_band:
                 issues.append(
                     {
                         "frame": str(final_path),
                         "problem": f"English subtitle too close to original subtitle/text band: gap={gap}px",
                         "suggestion": "increase margin_v or reduce font_size_en",
+                    }
+                )
+            elif overlap or gap < min_gap:
+                warnings.append(
+                    {
+                        "frame": str(final_path),
+                        "problem": f"English subtitle near non-primary text band: gap={gap}px",
+                        "suggestion": "review frame manually if the background UI text matters",
                     }
                 )
 
