@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Any
 
-from utils.ffmpeg_utils import run_command
+from utils.ffmpeg_utils import ffmpeg_executable, run_command
 
 
 def extract_audio(context, config: dict[str, Any]) -> dict[str, Path]:
@@ -12,7 +12,7 @@ def extract_audio(context, config: dict[str, Any]) -> dict[str, Path]:
     sample_rate = str(step_config.get("sample_rate", 16000))
     channels = str(step_config.get("channels", 1))
     command = [
-        "ffmpeg",
+        ffmpeg_executable(config),
         "-y",
         "-i",
         str(context.input_video),

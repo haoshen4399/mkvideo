@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Any
 
-from utils.ffmpeg_utils import quote_filter_path, run_command
+from utils.ffmpeg_utils import ffmpeg_executable, quote_filter_path, run_command
 from utils.json_utils import write_json
 
 
@@ -14,7 +14,7 @@ def render_video(context, config: dict[str, Any]) -> dict[str, Path]:
     crf = str(step_config.get("crf", 20))
     preset = str(step_config.get("preset", "medium"))
     command = [
-        "ffmpeg",
+        ffmpeg_executable(config),
         "-y",
         "-i",
         str(context.input_video),

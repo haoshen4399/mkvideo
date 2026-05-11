@@ -14,7 +14,7 @@ def probe_video(context, config: dict[str, Any]) -> dict[str, Path]:
     if input_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
         raise ValueError(f"Unsupported video format: {input_path.suffix}")
 
-    probe = ffprobe_json(input_path)
+    probe = ffprobe_json(input_path, config)
     streams = probe.get("streams", [])
     video_stream = next((stream for stream in streams if stream.get("codec_type") == "video"), None)
     audio_stream = next((stream for stream in streams if stream.get("codec_type") == "audio"), None)

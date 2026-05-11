@@ -2,6 +2,8 @@ app:
   mode: standard
   input_dir: "./input"
   output_dir: "./output"
+  ffmpeg_path: "D:/ffmpeg/bin/ffmpeg.exe"
+  ffprobe_path: "D:/ffmpeg/bin/ffprobe.exe"
   keep_intermediate: true
   max_video_minutes: 10
   resume: true
