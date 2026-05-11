@@ -25,12 +25,14 @@ def translate_subtitles(context, config: dict[str, Any]) -> dict[str, Path]:
         temp_path.write_text(translated_text, encoding="utf-8")
         items = read_srt(temp_path)
         temp_path.unlink(missing_ok=True)
-        errors = validate_basic(items)
         if len(items) != len(source_items):
-            errors.append("Translated subtitle count differs from source")
+            errors = ["Translated subtitle count differs from source"]
+        else:
+            errors = []
         for source_item, item in zip(source_items, items):
             item.start_ms = source_item.start_ms
             item.end_ms = source_item.end_ms
+        errors.extend(validate_basic(items))
         if errors:
             raise ValueError("; ".join(errors))
         write_srt(output, items)

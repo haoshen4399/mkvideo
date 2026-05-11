@@ -167,6 +167,11 @@ steps:
     enabled: true
     mode: en_only
     font_name: Arial
+    font_size: 34
+    dynamic_position_enabled: true
+    dynamic_font_anchor_ratio: 1.0
+    dynamic_min_y_ratio: 0.50
+    dynamic_max_y_ratio: 0.82
     overwrite: false
 
   render_video:

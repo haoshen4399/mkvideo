@@ -16,16 +16,71 @@ def build_ass(context, config: dict[str, Any]) -> dict[str, Path]:
     zh_items = read_srt(context.zh_ai_checked_srt_path) if context.zh_ai_checked_srt_path.exists() else []
     mode = step_config.get("mode", "en_only")
     style = _ass_header(position, step_config, video_info)
+    dynamic_positions = _dynamic_event_positions(context, config, position, step_config, video_info, en_items)
     events = []
     for idx, item in enumerate(en_items):
         text = _escape_ass(item.text)
         if mode == "bilingual" and idx < len(zh_items):
             text = f"{_escape_ass(zh_items[idx].text)}\\N{text}"
+        override = dynamic_positions.get(idx + 1, "")
         events.append(
-            f"Dialogue: 0,{_ass_time(item.start_ms)},{_ass_time(item.end_ms)},Default,,0,0,0,,{text}"
+            f"Dialogue: 0,{_ass_time(item.start_ms)},{_ass_time(item.end_ms)},Default,,0,0,0,,{override}{text}"
         )
     output.write_text(style + "\n".join(events) + "\n", encoding="utf-8-sig")
     return {"ass": output}
+
+
+def _dynamic_event_positions(
+    context,
+    config: dict[str, Any],
+    position: dict[str, Any],
+    step_config: dict[str, Any],
+    video_info: dict[str, Any],
+    items,
+) -> dict[int, str]:
+    if not step_config.get("dynamic_position_enabled", True):
+        return {}
+    if step_config.get("mode", "en_only") == "bilingual":
+        return {}
+    try:
+        import cv2
+
+        from core.position_analyzer import _detect_original_subtitle_band
+    except Exception:
+        return {}
+
+    capture = cv2.VideoCapture(str(context.input_video))
+    if not capture.isOpened():
+        return {}
+    fps = capture.get(cv2.CAP_PROP_FPS) or video_info.get("fps") or 25
+    width = int(video_info.get("width") or 720)
+    height = int(video_info.get("height") or 1280)
+    font_size = int(step_config.get("font_size", position.get("font_size_en", 34)))
+    gap = int(position.get("subtitle_gap_px_used", step_config.get("subtitle_gap_px", 30)))
+    min_y = int(height * float(step_config.get("dynamic_min_y_ratio", 0.50)))
+    max_y = int(height * float(step_config.get("dynamic_max_y_ratio", 0.82)))
+    positions: dict[int, str] = {}
+    detector_config = {
+        **config.get("steps", {}).get("screenshot_position", {}),
+        "original_subtitle_detection_min_y_ratio": step_config.get("dynamic_detection_min_y_ratio", 0.45),
+        "original_subtitle_detection_max_y_ratio": step_config.get("dynamic_detection_max_y_ratio", 0.88),
+    }
+    try:
+        for idx, item in enumerate(items, start=1):
+            sample_second = max(0, ((item.start_ms + item.end_ms) / 2) / 1000)
+            capture.set(cv2.CAP_PROP_POS_FRAMES, int(sample_second * fps))
+            success, frame = capture.read()
+            if not success:
+                continue
+            band = _detect_original_subtitle_band(frame, detector_config)
+            if not band:
+                continue
+            target_y = band["y2"] + gap + int(font_size * float(step_config.get("dynamic_font_anchor_ratio", 1.0)))
+            target_y = max(min_y, min(max_y, target_y))
+            positions[idx] = f"{{\\an2\\pos({width // 2},{target_y})}}"
+    finally:
+        capture.release()
+    return positions
 
 
 def _ass_header(position: dict[str, Any], step_config: dict[str, Any], video_info: dict[str, Any]) -> str:

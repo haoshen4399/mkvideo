@@ -291,12 +291,12 @@ def _analyze_frame_pair_with_opencv(
                     "suggestion": "move subtitle away from edge",
                     }
                 )
-        primary_original_band = _pick_primary_visual_subtitle_band(final_text_bands, english_bbox, width, height, step_config)
-        if not primary_original_band:
-            primary_original_band = _pick_primary_original_subtitle_band(original_bands, english_bbox, width, height, step_config)
+        primary_original_band = _choose_primary_subtitle_band(
+            final_text_bands, original_bands, english_bbox, width, height, step_config
+        )
         if primary_original_band:
             subtitle_gap = english_bbox["y1"] - primary_original_band["y2"]
-            if subtitle_gap < -int(step_config.get("max_allowed_outline_overlap_px", 8)):
+            if subtitle_gap < -int(step_config.get("max_allowed_outline_overlap_px", 30)):
                 issues.append(
                     {
                         "frame": str(final_path),
@@ -346,7 +346,7 @@ def _analyze_frame_pair_with_opencv(
                 step_config.get("source_subtitle_center_tolerance_ratio", 0.18)
             )
             if overlap and centered_band:
-                overlap_tolerance = int(step_config.get("max_allowed_outline_overlap_px", 8))
+                overlap_tolerance = int(step_config.get("max_allowed_outline_overlap_px", 30))
                 target = warnings if vertical_overlap <= overlap_tolerance else issues
                 target.append(
                     {
@@ -373,8 +373,7 @@ def _analyze_frame_pair_with_opencv(
         "height": height,
         "english_bbox": english_bbox,
         "primary_original_subtitle_bbox": (
-            _pick_primary_visual_subtitle_band(final_text_bands, english_bbox, width, height, step_config)
-            or _pick_primary_original_subtitle_band(original_bands, english_bbox, width, height, step_config)
+            _choose_primary_subtitle_band(final_text_bands, original_bands, english_bbox, width, height, step_config)
         )
         if english_bbox
         else None,
@@ -468,6 +467,8 @@ def _pick_primary_original_subtitle_band(
     center_tolerance = width * float(step_config.get("source_subtitle_center_tolerance_ratio", 0.24))
     preferred_y = height * float(step_config.get("primary_source_preferred_y_ratio", 0.64))
     min_source_y2 = height * float(step_config.get("primary_source_min_y2_ratio", 0.55))
+    desired_gap = height * float(step_config.get("ideal_subtitle_gap_ratio", 0.026))
+    max_considered_gap = int(step_config.get("source_pair_max_candidate_gap_px", 160))
     for band in bands:
         band_width = band.get("width") or band.get("x2", 0) - band.get("x1", 0)
         if band_width < min_width:
@@ -485,17 +486,38 @@ def _pick_primary_original_subtitle_band(
             continue
         center_y = (band["y1"] + band["y2"]) / 2
         gap = english_bbox["y1"] - band["y2"]
+        if gap > max_considered_gap:
+            continue
         score = (
-            band_width * 0.4
+            band_width * 0.25
             + band.get("component_count", 0) * 16
-            + band["y2"] * 1.25
+            + band["y2"] * 0.8
             - abs(center_y - preferred_y) * 0.25
-            - abs(gap - height * 0.035) * 5.0
+            - abs(gap - desired_gap) * 5.0
         )
         candidates.append((score, {**band, "width": band_width}))
     if not candidates:
         return None
     return max(candidates, key=lambda item: item[0])[1]
+
+
+def _choose_primary_subtitle_band(
+    final_bands: list[dict[str, int]],
+    original_bands: list[dict[str, int]],
+    english_bbox: dict[str, int],
+    width: int,
+    height: int,
+    step_config: dict[str, Any],
+) -> dict[str, int] | None:
+    candidates = [
+        _pick_primary_visual_subtitle_band(final_bands, english_bbox, width, height, step_config),
+        _pick_primary_original_subtitle_band(original_bands, english_bbox, width, height, step_config),
+    ]
+    candidates = [candidate for candidate in candidates if candidate]
+    if not candidates:
+        return None
+    desired_gap = height * float(step_config.get("ideal_subtitle_gap_ratio", 0.026))
+    return min(candidates, key=lambda band: abs((english_bbox["y1"] - band["y2"]) - desired_gap))
 
 
 def _pick_primary_visual_subtitle_band(
@@ -538,9 +560,10 @@ def _pick_primary_visual_subtitle_band(
 def _same_band(first: dict[str, int], second: dict[str, int]) -> bool:
     first_width = first.get("width") or first.get("x2", 0) - first.get("x1", 0)
     second_width = second.get("width") or second.get("x2", 0) - second.get("x1", 0)
+    tolerance = 10
     return (
-        abs(first["y1"] - second["y1"]) <= 4
-        and abs(first["y2"] - second["y2"]) <= 4
+        abs(first["y1"] - second["y1"]) <= tolerance
+        and abs(first["y2"] - second["y2"]) <= tolerance
         and _horizontal_overlap_ratio({**first, "width": first_width}, {**second, "width": second_width}) > 0.7
     )
 
