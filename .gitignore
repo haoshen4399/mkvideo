@@ -1,0 +1,20 @@
+# Local secrets and runtime configuration
+config.yaml
+.env
+.env.*
+
+# Python/runtime artifacts
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# User media, generated outputs, and large model caches
+input/
+output/
+models/
+
+# IDE/local files
+.idea/
+.vscode/
+

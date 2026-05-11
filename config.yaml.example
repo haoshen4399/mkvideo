@@ -1,0 +1,205 @@
+app:
+  mode: standard
+  input_dir: "./input"
+  output_dir: "./output"
+  keep_intermediate: true
+  max_video_minutes: 10
+  resume: true
+  start_from:
+  stop_after:
+  only_steps: []
+  overwrite_steps: []
+
+llm_providers:
+  default:
+    type: openai_compatible
+    base_url: "https://openai.5054399.com/siliconflow/v1"
+    api_key_env: "SILICONFLOW_API_KEY"
+    default_model: "deepseek-ai/DeepSeek-V3.2"
+    timeout: 180
+    max_retries: 2
+    retry_backoff_seconds: 2
+    temperature: 0.2
+
+  vision:
+    type: openai_compatible
+    base_url: "https://openai.5054399.com/aliyun/compatible-mode/v1"
+    api_key_env: "VISION_API_KEY"
+    default_model: "qwen3.6-plus-2026-04-02"
+    timeout: 180
+    max_retries: 2
+    retry_backoff_seconds: 2
+    temperature: 0.2
+
+  vision_fallback:
+    type: openai_compatible
+    base_url: "https://openai.5054399.com/moonshot/v1"
+    api_key_env: "VISION_FALLBACK_API_KEY"
+    default_model: "kimi-k2.6"
+    timeout: 180
+    max_retries: 2
+    retry_backoff_seconds: 2
+    temperature: 0.2
+
+vision:
+  vision_base_url: "https://openai.5054399.com/aliyun/compatible-mode/v1"
+  vision_model: "qwen3.6-plus-2026-04-02"
+  vision_fallback_base_url: "https://openai.5054399.com/moonshot/v1"
+  vision_fallback_model: "kimi-k2.6"
+
+steps:
+  probe_video:
+    enabled: true
+
+  extract_audio:
+    enabled: true
+    sample_rate: 16000
+    channels: 1
+    overwrite: false
+
+  asr:
+    enabled: true
+    # options: faster-whisper, openai-whisper, stable-ts, whisper-timestamped
+    engine: openai-whisper
+    fallback_engine: stable-ts
+    quality_fallback_enabled: true
+    quality_fallback_engine: stable-ts
+    quality_fallback_model: large-v3
+    diagnostic_enabled: true
+    diagnostic_engine: whisper-timestamped
+    diagnostic_model: large-v3
+    model: large-v3
+    fallback_model: large-v3
+    download_root: models/whisper
+    language: zh
+    device: cpu
+    compute_type: int8
+    beam_size: 5
+    condition_on_previous_text: false
+    word_timestamps: true
+    fp16: false
+    temperature: [0.0]
+    compression_ratio_threshold: 2.4
+    logprob_threshold: -0.75
+    no_speech_threshold: 0.6
+    hallucination_silence_threshold: 1.0
+    quality_max_gap_ms: 9000
+    quality_min_duration_ms: 250
+    quality_max_duration_ms: 9000
+    quality_min_avg_logprob: -1.0
+    quality_max_no_speech_prob: 0.85
+    fail_on_quality_error: false
+    overwrite: false
+
+  zh_postprocess:
+    enabled: true
+    min_duration_ms: 800
+    max_duration_ms: 7000
+    merge_short_subtitle: true
+    visual_first_subtitle_guard: true
+    first_subtitle_scan_seconds: 12
+    first_subtitle_scan_interval_seconds: 0.25
+    first_subtitle_lead_pad_ms: 200
+    first_start_guard_max_original_ms: 500
+    first_start_guard_min_shift_ms: 800
+    visual_subtitle_min_y_ratio: 0.55
+    visual_subtitle_max_y_ratio: 0.92
+    visual_subtitle_min_components: 8
+    filter_repeated_text_runs: true
+    repeated_text_min_count: 4
+    repeated_text_min_span_ms: 4000
+    visual_presence_filter_enabled: true
+    visual_presence_offsets_seconds: [-0.15, 0.0, 0.15]
+    visual_presence_min_duration_ms: 700
+    visual_presence_required_ratio: 0.25
+    visual_presence_fail_on_many_drops: false
+    overwrite: false
+
+  zh_ai_check:
+    enabled: true
+    provider: default
+    model: deepseek-ai/DeepSeek-V3.2
+    prompt_path: prompts/zh_check.txt
+    continue_on_failure: true
+    overwrite: false
+
+  translate:
+    enabled: true
+    provider: default
+    model: deepseek-ai/DeepSeek-V3.2
+    prompt_path: prompts/translate_en.txt
+    target_lang: en
+    strategy: understand_full_context_first
+    allow_placeholder_on_failure: false
+    overwrite: false
+
+  en_check:
+    enabled: true
+    max_lines: 2
+    max_line_chars: 42
+    max_cps: 17
+    overwrite: false
+
+  screenshot_position:
+    enabled: true
+    engine: opencv
+    sample_count: 3
+    sample_strategy: active_source_subtitle
+    sample_interval_seconds: 1
+    vision_enabled: true
+    provider: vision
+    model: qwen3.6-plus-2026-04-02
+    fallback_provider: vision_fallback
+    fallback_model: kimi-k2.6
+    margin_v: 80
+    placement_mode: below_original_subtitle
+    subtitle_gap_ratio: 0.045
+    subtitle_gap_px: 56
+    max_relative_margin_ratio: 0.48
+    original_subtitle_detection_min_y_ratio: 0.5
+    original_subtitle_detection_max_y_ratio: 0.9
+    overwrite: false
+
+  build_ass:
+    enabled: true
+    mode: en_only
+    font_name: Arial
+    overwrite: false
+
+  render_video:
+    enabled: true
+    engine: ffmpeg
+    crf: 20
+    preset: medium
+    audio_codec: copy
+    overwrite: false
+
+  final_visual_qc:
+    enabled: true
+    sample_count: 10
+    sample_strategy: active_subtitle_middle
+    sample_interval_seconds: 1
+    opencv_rule_enabled: true
+    final_subtitle_min_y_ratio: 0.35
+    final_subtitle_max_y_ratio: 0.98
+    original_subtitle_min_y_ratio: 0.25
+    original_subtitle_max_y_ratio: 0.88
+    min_horizontal_overlap_ratio: 0.25
+    min_vertical_overlap_px: 5
+    row_text_density_threshold: 0.018
+    max_subtitle_band_height_ratio: 0.085
+    min_subtitle_gap_ratio: 0.015
+    edge_margin_px: 8
+    require_original_subtitle_evidence: true
+    visual_subtitle_min_y_ratio: 0.50
+    visual_subtitle_max_y_ratio: 0.92
+    visual_subtitle_min_components: 8
+    vision_enabled: true
+    provider: vision
+    model: qwen3.6-plus-2026-04-02
+    fallback_provider: vision_fallback
+    fallback_model: kimi-k2.6
+    fail_on_overlap: true
+    fail_on_ai_error: false
+    overwrite: false
+

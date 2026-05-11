@@ -1,0 +1,31 @@
+# 基础工具库
+requests>=2.31.0
+python-dotenv>=1.0.0
+loguru>=0.7.2
+tqdm>=4.66.0
+pydantic>=2.5.0
+PyYAML>=6.0.1
+openai>=1.40.0
+
+# 音视频基础
+ffmpeg-python>=0.2.0
+pysubs2>=1.6.0
+opencv-python>=4.8.1.78
+librosa>=0.10.1
+soundfile>=0.12.1
+silero-vad>=6.2.1
+
+# 人声分离 Demucs 依赖
+torch>=2.1.0
+torchaudio>=2.1.0
+demucs>=4.0.1
+
+# 语音转文字 Whisper
+faster-whisper>=1.0.0
+openai-whisper>=20231117
+# 可选增强 ASR 引擎：stable-ts 提供更稳定的 Whisper 时间戳，whisper-timestamped 提供 DTW/word confidence 对齐。
+stable-ts>=2.19.0
+whisper-timestamped>=1.15.0
+transformers>=4.35.0
+tokenizers>=0.14.0
+
