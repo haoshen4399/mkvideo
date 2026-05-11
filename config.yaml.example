@@ -190,8 +190,8 @@ steps:
     row_text_density_threshold: 0.018
     max_subtitle_band_height_ratio: 0.085
     min_subtitle_gap_ratio: 0.015
-    max_subtitle_gap_ratio: 0.075
-    max_subtitle_gap_px: 96
+    max_subtitle_gap_ratio: 0.045
+    max_subtitle_gap_px: 58
     edge_margin_px: 8
     require_original_subtitle_evidence: true
     visual_subtitle_min_y_ratio: 0.50

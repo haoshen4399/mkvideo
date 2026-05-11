@@ -205,7 +205,7 @@ def _apply_relative_subtitle_position(
     )
     max_gap = max(14, int(height * float(step_config.get("max_subtitle_gap_ratio", 0.024))))
     gap = min(configured_gap, max_gap)
-    target_bottom = min(height - 12, band["y2"] + gap + int(font_size * 1.9))
+    target_bottom = min(height - 12, band["y2"] + gap + int(font_size * 1.0))
     min_margin = max(24, int(height * 0.025))
     max_margin = max(min_margin, int(height * float(step_config.get("max_relative_margin_ratio", 0.48))))
     margin_v = max(min_margin, min(max_margin, height - target_bottom))
