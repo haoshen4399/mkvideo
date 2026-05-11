@@ -7,6 +7,7 @@ from loguru import logger
 from app.config_loader import load_config
 from app.context import TaskContext
 from app.pipeline import Pipeline
+from utils.ffmpeg_utils import ensure_ffmpeg_on_path
 from utils.log_utils import setup_logger
 
 SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv"}
@@ -30,6 +31,7 @@ def main() -> None:
     load_dotenv()
     args = parse_args()
     config = load_config(Path(args.config))
+    ensure_ffmpeg_on_path(config)
     input_videos = resolve_input_videos(args, config)
     output_dir = Path(args.output or config.get("app", {}).get("output_dir", "./output"))
     if not input_videos:

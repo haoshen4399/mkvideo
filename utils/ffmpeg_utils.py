@@ -17,6 +17,17 @@ def ffprobe_executable(config: dict | None = None) -> str:
     return _resolve_binary("ffprobe", config, "ffprobe_path", "FFPROBE_BINARY")
 
 
+def ensure_ffmpeg_on_path(config: dict | None = None) -> None:
+    ffmpeg_path = Path(ffmpeg_executable(config)).resolve()
+    ffprobe_path = Path(ffprobe_executable(config)).resolve()
+    bin_dirs = [ffmpeg_path.parent, ffprobe_path.parent]
+    path_parts = os.environ.get("PATH", "").split(os.pathsep)
+    normalized = {str(Path(part).resolve()).lower() for part in path_parts if part}
+    prepend = [str(path) for path in bin_dirs if str(path).lower() not in normalized]
+    if prepend:
+        os.environ["PATH"] = os.pathsep.join(prepend + path_parts)
+
+
 def _resolve_binary(binary_name: str, config: dict | None, config_key: str, env_key: str) -> str:
     app_config = (config or {}).get("app", {}) if isinstance(config, dict) else {}
     candidates = [
