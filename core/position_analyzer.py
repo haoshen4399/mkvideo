@@ -199,8 +199,13 @@ def _apply_relative_subtitle_position(
     height = int(video_info.get("height") or 1080)
     band = _median_band(subtitle_bands)
     font_size = int(position.get("font_size_en", _font_size(height)))
-    gap = max(int(step_config.get("subtitle_gap_px", 26)), int(height * float(step_config.get("subtitle_gap_ratio", 0.018))))
-    target_bottom = min(height - 12, band["y2"] + gap + int(font_size * 1.25))
+    configured_gap = max(
+        int(step_config.get("subtitle_gap_px", 22)),
+        int(height * float(step_config.get("subtitle_gap_ratio", 0.016))),
+    )
+    max_gap = max(14, int(height * float(step_config.get("max_subtitle_gap_ratio", 0.024))))
+    gap = min(configured_gap, max_gap)
+    target_bottom = min(height - 12, band["y2"] + gap + int(font_size * 1.9))
     min_margin = max(24, int(height * 0.025))
     max_margin = max(min_margin, int(height * float(step_config.get("max_relative_margin_ratio", 0.48))))
     margin_v = max(min_margin, min(max_margin, height - target_bottom))
@@ -209,6 +214,7 @@ def _apply_relative_subtitle_position(
         "position": "below_original_subtitle",
         "margin_v": margin_v,
         "detected_original_subtitle_bbox": band,
+        "subtitle_gap_px_used": gap,
         "relative_position_used": True,
         "relative_position_reason": "place English subtitle directly below detected original Chinese subtitle",
     }
@@ -219,31 +225,79 @@ def _detect_original_subtitle_band(frame, step_config: dict[str, Any]) -> dict[s
     import numpy as np
 
     height, width = frame.shape[:2]
+    try:
+        from core.final_visual_qc import _bands_from_mask, _text_like_mask
+
+        text_bands = _bands_from_mask(
+            _text_like_mask(frame),
+            min_y_ratio=float(step_config.get("original_subtitle_detection_min_y_ratio", 0.5)),
+            max_y_ratio=min(float(step_config.get("original_subtitle_detection_max_y_ratio", 0.86)), 0.9),
+        )
+        scored_text_bands = [
+            (_score_original_candidate(band, width, height, step_config), band)
+            for band in text_bands
+            if (band.get("width") or band.get("x2", 0) - band.get("x1", 0))
+            >= width * float(step_config.get("original_subtitle_min_width_ratio", 0.18))
+        ]
+        if scored_text_bands:
+            band = max(scored_text_bands, key=lambda item: item[0])[1]
+            return {
+                "x1": int(band.get("x1", 0)),
+                "y1": int(band["y1"]),
+                "x2": int(band.get("x2", 0)),
+                "y2": int(band["y2"]),
+                "width": int(band.get("width") or band.get("x2", 0) - band.get("x1", 0)),
+                "height": int(band["height"]),
+                "component_count": int(band.get("component_count", 0)),
+            }
+    except Exception:
+        pass
+
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    mask = ((gray > 160) & (hsv[:, :, 1] < 130)).astype("uint8") * 255
-    mask[: int(height * float(step_config.get("original_subtitle_detection_min_y_ratio", 0.5))), :] = 0
-    mask[int(height * float(step_config.get("original_subtitle_detection_max_y_ratio", 0.9))) :, :] = 0
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((9, 25), np.uint8), iterations=1)
-    mask = cv2.dilate(mask, np.ones((5, 15), np.uint8), iterations=1)
+    mask = ((gray > 150) & (hsv[:, :, 1] < 150)).astype("uint8") * 255
+    min_y_ratio = float(step_config.get("original_subtitle_detection_min_y_ratio", 0.5))
+    max_y_ratio = min(float(step_config.get("original_subtitle_detection_max_y_ratio", 0.86)), 0.86)
+    mask[: int(height * min_y_ratio), :] = 0
+    mask[int(height * max_y_ratio) :, :] = 0
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((7, 21), np.uint8), iterations=1)
+    mask = cv2.dilate(mask, np.ones((3, 11), np.uint8), iterations=1)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    candidates: list[dict[str, int]] = []
+    candidates: list[tuple[float, dict[str, int]]] = []
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)
         area = w * h
         center_x = x + w / 2
-        if w < width * 0.08:
+        center_y = y + h / 2
+        if w < width * float(step_config.get("original_subtitle_min_width_ratio", 0.18)):
             continue
         if h < max(16, height * 0.018) or h > height * 0.13:
             continue
         if area < width * height * 0.0025:
             continue
-        if abs(center_x - width / 2) > width * 0.44:
+        center_distance = abs(center_x - width / 2)
+        if center_distance > width * 0.36:
             continue
-        candidates.append({"x1": x, "y1": y, "x2": x + w, "y2": y + h, "width": w, "height": h})
+        candidate = {"x1": x, "y1": y, "x2": x + w, "y2": y + h, "width": w, "height": h}
+        candidates.append((_score_original_candidate(candidate, width, height, step_config), candidate))
     if not candidates:
         return None
-    return max(candidates, key=lambda item: (item["width"], item["y2"]))
+    return max(candidates, key=lambda item: item[0])[1]
+
+
+def _score_original_candidate(band: dict[str, int], width: int, height: int, step_config: dict[str, Any]) -> float:
+    band_width = band.get("width") or band.get("x2", 0) - band.get("x1", 0)
+    center_x = (band.get("x1", 0) + band.get("x2", 0)) / 2
+    center_y = (band.get("y1", 0) + band.get("y2", 0)) / 2
+    center_distance = abs(center_x - width / 2)
+    preferred_y = height * float(step_config.get("original_subtitle_preferred_y_ratio", 0.64))
+    return (
+        band_width * 2.2
+        + band.get("component_count", 0) * 18
+        - center_distance * 1.1
+        - abs(center_y - preferred_y) * 0.55
+        - max(0, band.get("y2", 0) - height * 0.8) * 1.4
+    )
 
 
 def _median_band(bands: list[dict[str, int]]) -> dict[str, int]:

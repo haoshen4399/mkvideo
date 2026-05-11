@@ -153,11 +153,12 @@ steps:
     fallback_model: kimi-k2.6
     margin_v: 80
     placement_mode: below_original_subtitle
-    subtitle_gap_ratio: 0.045
-    subtitle_gap_px: 56
+    subtitle_gap_ratio: 0.016
+    subtitle_gap_px: 22
+    max_subtitle_gap_ratio: 0.024
     max_relative_margin_ratio: 0.48
     original_subtitle_detection_min_y_ratio: 0.5
-    original_subtitle_detection_max_y_ratio: 0.9
+    original_subtitle_detection_max_y_ratio: 0.86
     overwrite: false
 
   build_ass:
@@ -189,6 +190,8 @@ steps:
     row_text_density_threshold: 0.018
     max_subtitle_band_height_ratio: 0.085
     min_subtitle_gap_ratio: 0.015
+    max_subtitle_gap_ratio: 0.075
+    max_subtitle_gap_px: 96
     edge_margin_px: 8
     require_original_subtitle_evidence: true
     visual_subtitle_min_y_ratio: 0.50
@@ -202,4 +205,3 @@ steps:
     fail_on_overlap: true
     fail_on_ai_error: false
     overwrite: false
-
