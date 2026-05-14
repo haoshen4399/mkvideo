@@ -2,6 +2,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
+from engines.whisper_dtw_patch import force_python_dtw
 from utils.srt_utils import SubtitleItem, read_srt, write_srt
 
 
@@ -10,6 +11,10 @@ def transcribe_with_stable_ts(audio_path: Path, output_srt: Path, config: dict[s
         import stable_whisper
     except ImportError as exc:
         raise RuntimeError("stable-ts is not installed. Install it with: pip install stable-ts") from exc
+
+    python_dtw_enabled = False
+    if bool(config.get("force_python_dtw", True)):
+        python_dtw_enabled = force_python_dtw()
 
     started = perf_counter()
     model_name = config.get("model") or config.get("fallback_model", "large-v3")
@@ -42,6 +47,7 @@ def transcribe_with_stable_ts(audio_path: Path, output_srt: Path, config: dict[s
         "duration_seconds": round(perf_counter() - started, 3),
         "subtitle_count": len(items),
         "stabilized_timestamps": True,
+        "python_dtw_enabled": python_dtw_enabled,
         "condition_on_previous_text": bool(config.get("condition_on_previous_text", False)),
         "no_speech_threshold": float(config.get("no_speech_threshold", 0.6)),
         "logprob_threshold": float(config.get("logprob_threshold", -0.75)),

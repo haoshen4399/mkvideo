@@ -63,7 +63,7 @@ def _dynamic_event_positions(
     detector_config = {
         **config.get("steps", {}).get("screenshot_position", {}),
         "original_subtitle_detection_min_y_ratio": step_config.get("dynamic_detection_min_y_ratio", 0.45),
-        "original_subtitle_detection_max_y_ratio": step_config.get("dynamic_detection_max_y_ratio", 0.88),
+        "original_subtitle_detection_max_y_ratio": step_config.get("dynamic_detection_max_y_ratio", 0.72),
     }
     try:
         for idx, item in enumerate(items, start=1):
@@ -74,24 +74,54 @@ def _dynamic_event_positions(
                 continue
             band = _detect_original_subtitle_band(frame, detector_config)
             if not band:
-                continue
-            source_bottom = band["y2"] + int(font_size * float(step_config.get("dynamic_source_bottom_pad_ratio", 2.2)))
-            if band.get("height", 0) < int(step_config.get("dynamic_min_source_band_height_px", 28)):
-                source_bottom += int(font_size * float(step_config.get("dynamic_thin_band_bottom_pad_ratio", 2.2)))
-            detected_bbox = position.get("detected_original_subtitle_bbox") or {}
-            detected_y2 = detected_bbox.get("y2")
-            if detected_y2:
-                tolerance = int(height * float(step_config.get("dynamic_source_expected_y2_tolerance_ratio", 0.02)))
-                expected_bottom = int(detected_y2) + tolerance
-                source_bottom = expected_bottom if band["y2"] > expected_bottom else max(band["y2"], min(source_bottom, expected_bottom))
+                band = _dynamic_fallback_source_band(position)
             else:
-                source_bottom = max(band["y2"], source_bottom)
-            target_y = source_bottom + gap + int(font_size * float(step_config.get("dynamic_font_anchor_ratio", 1.55)))
+                band = _select_dynamic_source_band(band, position, height, step_config)
+            if not band:
+                continue
+            source_bottom = _dynamic_source_visual_bottom(band, font_size, step_config)
+            target_y = source_bottom + gap + int(font_size * float(step_config.get("dynamic_font_anchor_ratio", 1.0)))
             target_y = max(min_y, min(max_y, target_y))
             positions[idx] = f"{{\\an2\\pos({width // 2},{target_y})}}"
     finally:
         capture.release()
     return positions
+
+
+def _dynamic_source_visual_bottom(band: dict[str, int], font_size: int, step_config: dict[str, Any]) -> int:
+    pad = int(step_config.get("dynamic_source_visual_bottom_pad_px", max(4, round(font_size * 0.15))))
+    return int(band["y2"]) + max(0, pad)
+
+
+def _select_dynamic_source_band(
+    band: dict[str, int],
+    position: dict[str, Any],
+    height: int,
+    step_config: dict[str, Any],
+) -> dict[str, int] | None:
+    fallback = _dynamic_fallback_source_band(position)
+    if not fallback:
+        return band
+
+    detected_y2 = int(fallback["y2"])
+    tolerance = int(height * float(step_config.get("dynamic_source_expected_y2_tolerance_ratio", 0.04)))
+    thin_height = int(step_config.get("dynamic_min_source_band_height_px", 28))
+    if band["y2"] > detected_y2 + tolerance:
+        return fallback
+    if detected_y2 - band["y2"] > tolerance and band.get("height", 0) < thin_height:
+        return fallback
+    return band
+
+
+def _dynamic_fallback_source_band(position: dict[str, Any]) -> dict[str, int] | None:
+    detected = position.get("detected_original_subtitle_bbox") or {}
+    required_keys = {"x1", "y1", "x2", "y2"}
+    if not required_keys.issubset(detected):
+        return None
+    band = {key: int(detected[key]) for key in required_keys}
+    band["width"] = max(0, band["x2"] - band["x1"])
+    band["height"] = max(0, band["y2"] - band["y1"])
+    return band
 
 
 def _ass_header(position: dict[str, Any], step_config: dict[str, Any], video_info: dict[str, Any]) -> str:

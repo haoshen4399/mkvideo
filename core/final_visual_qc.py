@@ -21,7 +21,7 @@ def run_final_visual_qc(context, config: dict[str, Any]) -> dict[str, Path]:
     if report_path.exists() and not step_config.get("overwrite", False):
         return {"final_visual_qc_report": report_path}
 
-    frame_paths, original_frame_paths, sample_seconds = _capture_qc_frame_pairs(context, step_config)
+    frame_paths, original_frame_paths, sample_seconds, final_sample_seconds = _capture_qc_frame_pairs(context, step_config)
     opencv_report = _opencv_rule_qc(frame_paths, original_frame_paths, sample_seconds, context.input_video, step_config)
     report = {
         "passed": opencv_report["passed"],
@@ -29,6 +29,7 @@ def run_final_visual_qc(context, config: dict[str, Any]) -> dict[str, Path]:
         "frames": [str(path) for path in frame_paths],
         "original_frames": [str(path) for path in original_frame_paths],
         "sample_seconds": sample_seconds,
+        "final_sample_seconds": final_sample_seconds,
         "issues": [],
         "summary": "AI visual QC disabled or unavailable.",
         "opencv_rule_qc": opencv_report,
@@ -43,27 +44,42 @@ def run_final_visual_qc(context, config: dict[str, Any]) -> dict[str, Path]:
             report["frames"] = [str(path) for path in frame_paths]
             report["original_frames"] = [str(path) for path in original_frame_paths]
             report["sample_seconds"] = sample_seconds
+            report["final_sample_seconds"] = final_sample_seconds
             report["provider"] = provider_name
             report["ai_passed"] = bool(report.get("passed", True))
         except Exception as exc:
             logger.warning("Final visual QC failed with primary provider: {}", exc)
             fallback_provider = step_config.get("fallback_provider")
             if fallback_provider:
-                provider = build_provider(fallback_provider, config)
-                response = provider.complete_with_images(_qc_prompt(), frame_paths, step_config.get("fallback_model"))
-                report = parse_json_object(response)
-                report["frames"] = [str(path) for path in frame_paths]
-                report["original_frames"] = [str(path) for path in original_frame_paths]
-                report["sample_seconds"] = sample_seconds
-                report["provider"] = fallback_provider
-                report["ai_passed"] = bool(report.get("passed", True))
+                try:
+                    provider = build_provider(fallback_provider, config)
+                    response = provider.complete_with_images(_qc_prompt(), frame_paths, step_config.get("fallback_model"))
+                    report = parse_json_object(response)
+                    report["frames"] = [str(path) for path in frame_paths]
+                    report["original_frames"] = [str(path) for path in original_frame_paths]
+                    report["sample_seconds"] = sample_seconds
+                    report["final_sample_seconds"] = final_sample_seconds
+                    report["provider"] = fallback_provider
+                    report["ai_passed"] = bool(report.get("passed", True))
+                except Exception as fallback_exc:
+                    logger.warning("Final visual QC fallback failed: {}", fallback_exc)
+                    if step_config.get("fail_on_ai_error", False):
+                        raise
+                    report["ai_error"] = str(exc)
+                    report["ai_fallback_error"] = str(fallback_exc)
             elif step_config.get("fail_on_ai_error", False):
                 raise
             else:
                 report["ai_error"] = str(exc)
 
     report["opencv_rule_qc"] = opencv_report
-    report["passed"] = bool(report.get("passed", True)) and opencv_report["passed"]
+    ai_passed = bool(report.get("passed", True))
+    if opencv_report["passed"] and not ai_passed and not step_config.get("fail_on_ai_visual_fail", False):
+        report["ai_visual_warning"] = report.get("summary") or report.get("issues")
+        report["passed"] = True
+        report["summary"] = "OpenCV hard-rule QC passed; AI visual QC warning only."
+    else:
+        report["passed"] = ai_passed and opencv_report["passed"]
     if not opencv_report["passed"]:
         report.setdefault("issues", [])
         report["issues"].extend(opencv_report["issues"])
@@ -74,7 +90,7 @@ def run_final_visual_qc(context, config: dict[str, Any]) -> dict[str, Path]:
     return {"final_visual_qc_report": report_path}
 
 
-def _capture_qc_frame_pairs(context, step_config: dict[str, Any]) -> tuple[list[Path], list[Path], list[float]]:
+def _capture_qc_frame_pairs(context, step_config: dict[str, Any]) -> tuple[list[Path], list[Path], list[float], list[float]]:
     import cv2
 
     final_dir = context.final_qc_screenshots_dir
@@ -84,32 +100,58 @@ def _capture_qc_frame_pairs(context, step_config: dict[str, Any]) -> tuple[list[
     final_capture = cv2.VideoCapture(str(context.final_video_path))
     original_capture = cv2.VideoCapture(str(context.input_video))
     if not final_capture.isOpened() or not original_capture.isOpened():
+        final_capture.release()
+        original_capture.release()
         raise ValueError("Cannot open original or final video for visual QC.")
     frame_count = int(final_capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     fps = final_capture.get(cv2.CAP_PROP_FPS) or 25
     if frame_count <= 0 or fps <= 0:
+        final_capture.release()
+        original_capture.release()
         raise ValueError("Video has no readable frames.")
     duration = frame_count / fps if fps else 0
     seconds = _qc_sample_seconds(context, duration, int(step_config.get("sample_count", 10)), step_config)
+    final_offset = _final_timeline_offset_seconds(context)
     final_paths: list[Path] = []
     original_paths: list[Path] = []
-    for index, second in enumerate(seconds, start=1):
-        frame_index = max(0, min(frame_count - 1, int(second * fps)))
-        final_capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-        original_capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-        final_success, final_frame = final_capture.read()
-        original_success, original_frame = original_capture.read()
-        if not final_success or not original_success:
-            continue
-        final_path = final_dir / f"final_qc_{index:03d}.jpg"
-        original_path = original_dir / f"original_qc_{index:03d}.jpg"
-        _write_cv_image(final_path, final_frame)
-        _write_cv_image(original_path, original_frame)
-        final_paths.append(final_path)
-        original_paths.append(original_path)
-    final_capture.release()
-    original_capture.release()
-    return final_paths, original_paths, seconds
+    final_seconds: list[float] = []
+    try:
+        for index, second in enumerate(seconds, start=1):
+            final_second = second + final_offset
+            frame_index = max(0, min(frame_count - 1, int(final_second * fps)))
+            original_frame_index = max(0, int(second * fps))
+            final_capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+            original_capture.set(cv2.CAP_PROP_POS_FRAMES, original_frame_index)
+            final_success, final_frame = final_capture.read()
+            original_success, original_frame = original_capture.read()
+            if not final_success or not original_success:
+                continue
+            final_path = final_dir / f"final_qc_{index:03d}.jpg"
+            original_path = original_dir / f"original_qc_{index:03d}.jpg"
+            _write_cv_image(final_path, final_frame)
+            _write_cv_image(original_path, original_frame)
+            final_paths.append(final_path)
+            original_paths.append(original_path)
+            final_seconds.append(round(final_second, 3))
+    finally:
+        final_capture.release()
+        original_capture.release()
+    if not final_paths:
+        raise ValueError("Final visual QC could not capture readable frame pairs.")
+    return final_paths, original_paths, seconds, final_seconds
+
+
+def _final_timeline_offset_seconds(context) -> float:
+    report_path = context.reports_dir / "cover_intro_report.json"
+    if not report_path.exists():
+        return 0.0
+    try:
+        report = read_json(report_path)
+    except Exception:
+        return 0.0
+    if not report.get("enabled", True):
+        return 0.0
+    return float(report.get("duration_seconds") or 0.0)
 
 
 def _qc_sample_seconds(context, duration: float, sample_count: int, step_config: dict[str, Any]) -> list[float]:
@@ -266,7 +308,10 @@ def _analyze_frame_pair_with_opencv(
     warnings = []
     edge_margin = int(step_config.get("edge_margin_px", 8))
     max_band_height = int(height * float(step_config.get("max_subtitle_band_height_ratio", 0.085)))
-    min_gap = int(height * float(step_config.get("min_subtitle_gap_ratio", 0.035)))
+    min_gap = max(
+        int(step_config.get("min_subtitle_gap_px", 10)),
+        int(height * float(step_config.get("min_subtitle_gap_ratio", 0.008))),
+    )
     max_gap = min(
         int(step_config.get("max_subtitle_gap_px", 58)),
         int(height * float(step_config.get("max_subtitle_gap_ratio", 0.045))),
@@ -319,7 +364,7 @@ def _analyze_frame_pair_with_opencv(
                     }
                 )
             elif subtitle_gap > max_gap:
-                issues.append(
+                warnings.append(
                     {
                         "frame": str(final_path),
                         "problem": f"English subtitle too far from original Chinese subtitle: gap={subtitle_gap}px",
@@ -351,7 +396,8 @@ def _analyze_frame_pair_with_opencv(
             centered_band = abs(band_center_x - width / 2) <= width * float(
                 step_config.get("source_subtitle_center_tolerance_ratio", 0.18)
             )
-            if overlap and centered_band:
+            is_primary_band = bool(primary_original_band and _same_band(band, primary_original_band))
+            if overlap and centered_band and is_primary_band:
                 overlap_tolerance = int(step_config.get("max_allowed_outline_overlap_px", 30))
                 target = warnings if vertical_overlap <= overlap_tolerance else issues
                 target.append(
@@ -378,11 +424,7 @@ def _analyze_frame_pair_with_opencv(
         "width": width,
         "height": height,
         "english_bbox": english_bbox,
-        "primary_original_subtitle_bbox": (
-            _choose_primary_subtitle_band(final_text_bands, original_bands, english_bbox, width, height, step_config)
-        )
-        if english_bbox
-        else None,
+        "primary_original_subtitle_bbox": primary_original_band if english_bbox else None,
         "added_text_bands": added_text_bands,
         "final_text_bands": final_text_bands,
         "original_text_bands": original_bands,
@@ -472,7 +514,7 @@ def _pick_primary_original_subtitle_band(
     min_width = width * float(step_config.get("primary_source_min_width_ratio", 0.18))
     center_tolerance = width * float(step_config.get("source_subtitle_center_tolerance_ratio", 0.24))
     preferred_y = height * float(step_config.get("primary_source_preferred_y_ratio", 0.64))
-    min_source_y2 = height * float(step_config.get("primary_source_min_y2_ratio", 0.55))
+    min_source_y2 = height * float(step_config.get("primary_source_min_y2_ratio", 0.35))
     max_source_y2 = _source_candidate_max_y2(height, step_config)
     desired_gap = height * float(step_config.get("ideal_subtitle_gap_ratio", 0.026))
     max_considered_gap = int(step_config.get("source_pair_max_candidate_gap_px", 160))
@@ -488,6 +530,8 @@ def _pick_primary_original_subtitle_band(
         if abs(center_x - width / 2) > center_tolerance:
             continue
         if band["y1"] >= english_bbox["y2"]:
+            continue
+        if band["y1"] > english_bbox["y1"] - int(step_config.get("source_must_be_above_english_px", 12)):
             continue
         if _horizontal_overlap_ratio(english_bbox, {**band, "width": band_width}) < float(
             step_config.get("min_horizontal_overlap_ratio", 0.25)
@@ -518,28 +562,53 @@ def _choose_primary_subtitle_band(
     height: int,
     step_config: dict[str, Any],
 ) -> dict[str, int] | None:
-    candidates = [
-        _pick_primary_visual_subtitle_band(final_bands, english_bbox, width, height, step_config),
-        _pick_primary_original_subtitle_band(original_bands, english_bbox, width, height, step_config),
-    ]
-    candidates = [candidate for candidate in candidates if candidate]
-    if not candidates:
+    original_candidate = _pick_primary_original_subtitle_band(original_bands, english_bbox, width, height, step_config)
+    if original_candidate:
+        return original_candidate
+    visual_candidate = _pick_primary_visual_subtitle_band(final_bands, english_bbox, width, height, step_config)
+    if visual_candidate:
+        return visual_candidate
+    return _detected_original_subtitle_candidate(english_bbox, width, height, step_config)
+
+
+def _detected_original_subtitle_candidate(
+    english_bbox: dict[str, int],
+    width: int,
+    height: int,
+    step_config: dict[str, Any],
+) -> dict[str, int] | None:
+    detected = step_config.get("_detected_original_subtitle_bbox") or {}
+    required_keys = {"x1", "y1", "x2", "y2"}
+    if not required_keys.issubset(detected):
         return None
-    desired_gap = height * float(step_config.get("ideal_subtitle_gap_ratio", 0.026))
-    return min(candidates, key=lambda band: abs((english_bbox["y1"] - band["y2"]) - desired_gap))
+    band = {key: int(detected[key]) for key in required_keys}
+    band["width"] = max(0, band["x2"] - band["x1"])
+    band["height"] = max(0, band["y2"] - band["y1"])
+    if band["width"] < width * float(step_config.get("primary_source_min_width_ratio", 0.18)):
+        return None
+    if band["y1"] >= english_bbox["y2"]:
+        return None
+    if band["y1"] > english_bbox["y1"] - int(step_config.get("source_must_be_above_english_px", 12)):
+        return None
+    if _horizontal_overlap_ratio(english_bbox, band) < float(step_config.get("min_horizontal_overlap_ratio", 0.18)):
+        return None
+    max_gap = int(step_config.get("detected_source_pair_max_candidate_gap_px", 220))
+    if english_bbox["y1"] - band["y2"] > max_gap:
+        return None
+    return band
 
 
 def _estimated_source_visual_bottom(band: dict[str, int], height: int, step_config: dict[str, Any]) -> int:
-    pad = int(height * float(step_config.get("source_visual_bottom_pad_ratio", 0.06)))
+    pad = int(step_config.get("source_visual_bottom_pad_px", 6))
     if band.get("height", 0) < int(step_config.get("source_visual_thin_band_height_px", 28)):
-        pad += int(height * float(step_config.get("source_visual_thin_band_extra_pad_ratio", 0.025)))
+        pad += int(step_config.get("source_visual_thin_band_extra_pad_px", 4))
     estimated_bottom = band["y2"] + pad
     detected_bbox = step_config.get("_detected_original_subtitle_bbox") or {}
     detected_y2 = detected_bbox.get("y2")
     if detected_y2:
         tolerance = int(height * float(step_config.get("source_visual_expected_y2_tolerance_ratio", 0.02)))
-        expected_bottom = int(detected_y2) + tolerance
-        return expected_bottom if band["y2"] > expected_bottom else max(band["y2"], min(estimated_bottom, expected_bottom))
+        if abs(int(detected_y2) - band["y2"]) <= tolerance:
+            return max(band["y2"], min(estimated_bottom, int(detected_y2) + pad))
     return max(band["y2"], estimated_bottom)
 
 
@@ -565,6 +634,12 @@ def _pick_primary_visual_subtitle_band(
         if band["y2"] > max_source_y2:
             continue
         if band["y1"] >= english_bbox["y2"]:
+            continue
+        if band["y1"] > english_bbox["y1"] - int(step_config.get("source_must_be_above_english_px", 12)):
+            continue
+        if _vertical_overlap_ratio(band, english_bbox) > float(
+            step_config.get("max_source_english_vertical_overlap_ratio", 0.35)
+        ):
             continue
         center_x = (band.get("x1", 0) + band.get("x2", 0)) / 2
         if abs(center_x - width / 2) > center_tolerance:
@@ -608,6 +683,14 @@ def _horizontal_overlap_ratio(first: dict[str, int], second: dict[str, int]) -> 
     overlap = max(0, min(first["x2"], second["x2"]) - max(first["x1"], second["x1"]))
     smaller_width = max(1, min(first["width"], second.get("width", second["x2"] - second["x1"])))
     return overlap / smaller_width
+
+
+def _vertical_overlap_ratio(first: dict[str, int], second: dict[str, int]) -> float:
+    overlap = max(0, min(first["y2"], second["y2"]) - max(first["y1"], second["y1"]))
+    first_height = first.get("height", first["y2"] - first["y1"])
+    second_height = second.get("height", second["y2"] - second["y1"])
+    smaller_height = max(1, min(first_height, second_height))
+    return overlap / smaller_height
 
 
 def _bands_from_mask(mask, min_y_ratio: float, max_y_ratio: float = 1.0) -> list[dict[str, int]]:

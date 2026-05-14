@@ -2,6 +2,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
+from engines.whisper_dtw_patch import force_python_dtw
 from utils.srt_utils import SubtitleItem, write_srt
 
 
@@ -10,6 +11,11 @@ def transcribe_with_openai_whisper(audio_path: Path, output_srt: Path, config: d
         import whisper
     except ImportError as exc:
         raise RuntimeError("openai-whisper is not installed.") from exc
+
+    word_timestamps = bool(config.get("word_timestamps", True))
+    python_dtw_enabled = False
+    if word_timestamps and bool(config.get("force_python_dtw", True)):
+        python_dtw_enabled = force_python_dtw()
 
     started = perf_counter()
     model_name = config.get("model") or config.get("fallback_model", "large-v3")
@@ -25,7 +31,7 @@ def transcribe_with_openai_whisper(audio_path: Path, output_srt: Path, config: d
         logprob_threshold=float(config.get("logprob_threshold", -0.75)),
         no_speech_threshold=float(config.get("no_speech_threshold", 0.6)),
         condition_on_previous_text=bool(config.get("condition_on_previous_text", False)),
-        word_timestamps=bool(config.get("word_timestamps", True)),
+        word_timestamps=word_timestamps,
         hallucination_silence_threshold=float(config.get("hallucination_silence_threshold", 1.0)),
         fp16=bool(config.get("fp16", False)),
         beam_size=int(config.get("beam_size", 5)),
@@ -62,7 +68,8 @@ def transcribe_with_openai_whisper(audio_path: Path, output_srt: Path, config: d
         "duration_seconds": round(perf_counter() - started, 3),
         "subtitle_count": len(items),
         "condition_on_previous_text": bool(config.get("condition_on_previous_text", False)),
-        "word_timestamps": bool(config.get("word_timestamps", True)),
+        "word_timestamps": word_timestamps,
+        "python_dtw_enabled": python_dtw_enabled,
         "no_speech_threshold": float(config.get("no_speech_threshold", 0.6)),
         "logprob_threshold": float(config.get("logprob_threshold", -0.75)),
         "hallucination_silence_threshold": float(config.get("hallucination_silence_threshold", 1.0)),

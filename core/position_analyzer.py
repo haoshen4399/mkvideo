@@ -238,6 +238,9 @@ def _detect_original_subtitle_band(frame, step_config: dict[str, Any]) -> dict[s
             for band in text_bands
             if (band.get("width") or band.get("x2", 0) - band.get("x1", 0))
             >= width * float(step_config.get("original_subtitle_min_width_ratio", 0.18))
+            and band.get("height", 0) <= height * float(step_config.get("original_subtitle_max_height_ratio", 0.11))
+            and abs(((band.get("x1", 0) + band.get("x2", 0)) / 2) - width / 2)
+            <= width * float(step_config.get("original_subtitle_center_tolerance_ratio", 0.25))
         ]
         if scored_text_bands:
             band = max(scored_text_bands, key=lambda item: item[0])[1]
@@ -276,7 +279,7 @@ def _detect_original_subtitle_band(frame, step_config: dict[str, Any]) -> dict[s
         if area < width * height * 0.0025:
             continue
         center_distance = abs(center_x - width / 2)
-        if center_distance > width * 0.36:
+        if center_distance > width * float(step_config.get("original_subtitle_center_tolerance_ratio", 0.25)):
             continue
         candidate = {"x1": x, "y1": y, "x2": x + w, "y2": y + h, "width": w, "height": h}
         candidates.append((_score_original_candidate(candidate, width, height, step_config), candidate))

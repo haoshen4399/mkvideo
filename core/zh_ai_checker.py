@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 from typing import Any
 
@@ -7,6 +6,7 @@ from loguru import logger
 from providers.openai_compatible_provider import build_provider
 from utils.json_utils import write_json
 from utils.srt_utils import format_srt, read_srt, strip_code_fence, validate_basic, write_srt
+from utils.text_utils import parse_json_object
 
 
 def check_zh_subtitles(context, config: dict[str, Any]) -> dict[str, Path]:
@@ -53,7 +53,7 @@ def _call_zh_checker(srt_text: str, step_config: dict[str, Any], config: dict[st
     prompt_template = Path(step_config.get("prompt_path", "prompts/zh_check.txt")).read_text(encoding="utf-8")
     response = provider.complete(prompt_template.replace("{{srt}}", srt_text), step_config.get("model"))
     cleaned = strip_code_fence(response)
-    data = json.loads(cleaned)
+    data = parse_json_object(cleaned)
     fixed = data.get("fixed_srt")
     if not fixed:
         raise ValueError("AI response does not contain fixed_srt")

@@ -1,4 +1,6 @@
 import argparse
+import gc
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -11,6 +13,7 @@ from utils.ffmpeg_utils import ensure_ffmpeg_on_path
 from utils.log_utils import setup_logger
 
 SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv"}
+STEP_ORDER = Pipeline.STEP_ORDER
 
 
 def parse_args() -> argparse.Namespace:
@@ -42,24 +45,35 @@ def main() -> None:
     logger.info("Found {} video(s) to process.", len(input_videos))
 
     failures: list[tuple[Path, str]] = []
+    batch_results: list[dict] = []
     for video in input_videos:
+        pipeline: Pipeline | None = None
         try:
             context = TaskContext.create(video, output_dir, config)
             setup_logger(context.logs_dir / "run.log")
             logger.info("Processing video: {}", video)
-            Pipeline(
+            pipeline = Pipeline(
                 config=config,
                 context=context,
-                resume=args.resume or bool(config.get("app", {}).get("resume", True)),
+                resume=args.resume or bool(config.get("app", {}).get("resume", False)),
                 start_from=args.start_from or config.get("app", {}).get("start_from"),
                 stop_after=args.stop_after or config.get("app", {}).get("stop_after"),
                 only_steps=args.only_step or config.get("app", {}).get("only_steps") or [],
                 overwrite_steps=args.overwrite_step or config.get("app", {}).get("overwrite_steps") or [],
-            ).run()
+            )
+            pipeline.run()
+            failures = [(path, error) for path, error in failures if path != video]
+            batch_results.append({"video": video, "status": "OK", "steps": pipeline.step_statuses(), "error": None})
         except Exception as exc:
+            steps = pipeline.step_statuses() if pipeline else {}
+            batch_results.append({"video": video, "status": "FAILED", "steps": steps, "error": str(exc)})
+            _log_video_failure_summary(video, steps, exc)
             failures.append((video, str(exc)))
             logger.error("Video failed: {} | {}", video, exc)
+        finally:
+            _cleanup_after_video()
 
+    _log_batch_summary(batch_results)
     if failures:
         failed = "\n".join(f"{path}: {error}" for path, error in failures)
         raise RuntimeError(f"{len(failures)} video(s) failed:\n{failed}")
@@ -80,3 +94,54 @@ def resolve_input_videos(args: argparse.Namespace, config: dict) -> list[Path]:
         for path in input_dir.iterdir()
         if path.is_file() and path.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
     )
+
+
+def _log_video_failure_summary(video: Path, steps: dict[str, str], exc: Exception) -> None:
+    logger.info("Step summary for failed video: {}", video.name)
+    if not steps:
+        logger.info("  No step state was created.")
+    for step in STEP_ORDER:
+        logger.info("  {:<20} {}", step, _status_label(steps.get(step, "pending")))
+    logger.info("  error                {}", exc)
+
+
+def _log_batch_summary(results: list[dict]) -> None:
+    logger.info("Batch summary: {} video(s)", len(results))
+    for index, result in enumerate(results, start=1):
+        logger.info("{}. {} | {}", index, result["status"], result["video"].name)
+        for step in STEP_ORDER:
+            logger.info("   {:<20} {}", step, _status_label(result.get("steps", {}).get(step, "pending")))
+        if result.get("error"):
+            logger.info("   error                {}", result["error"])
+
+
+def _status_label(status: str) -> str:
+    labels = {
+        "success": "OK",
+        "failed": "FAILED",
+        "running": "RUNNING",
+        "pending": "PENDING",
+        "not_run": "NOT_RUN",
+        "skipped": "SKIPPED",
+        "disabled": "DISABLED",
+    }
+    return labels.get(status, status.upper())
+
+
+def _cleanup_after_video() -> None:
+    """Best-effort cleanup between videos in long PyCharm runs."""
+    torch = sys.modules.get("torch")
+    if torch is not None:
+        try:
+            cuda = getattr(torch, "cuda", None)
+            if cuda is not None and cuda.is_available():
+                cuda.empty_cache()
+        except Exception:
+            pass
+    cv2 = sys.modules.get("cv2")
+    if cv2 is not None:
+        try:
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
+    gc.collect()

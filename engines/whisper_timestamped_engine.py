@@ -2,6 +2,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
+from engines.whisper_dtw_patch import force_python_dtw
 from utils.srt_utils import SubtitleItem, write_srt
 
 
@@ -12,6 +13,10 @@ def transcribe_with_whisper_timestamped(audio_path: Path, output_srt: Path, conf
         raise RuntimeError(
             "whisper-timestamped is not installed. Install it with: pip install whisper-timestamped"
         ) from exc
+
+    python_dtw_enabled = False
+    if bool(config.get("force_python_dtw", True)):
+        python_dtw_enabled = force_python_dtw()
 
     started = perf_counter()
     model_name = config.get("model") or config.get("fallback_model", "large-v3")
@@ -64,6 +69,7 @@ def transcribe_with_whisper_timestamped(audio_path: Path, output_srt: Path, conf
         "subtitle_count": len(items),
         "word_timestamps": True,
         "dtw_alignment": True,
+        "python_dtw_enabled": python_dtw_enabled,
         "word_confidence_count": len(confidence_values),
         "average_word_confidence": round(average_confidence, 4) if average_confidence is not None else None,
     }

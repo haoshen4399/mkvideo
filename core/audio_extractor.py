@@ -14,6 +14,7 @@ def extract_audio(context, config: dict[str, Any]) -> dict[str, Path]:
     command = [
         ffmpeg_executable(config),
         "-y",
+        "-nostdin",
         "-i",
         str(context.input_video),
         "-vn",

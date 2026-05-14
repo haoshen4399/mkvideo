@@ -19,6 +19,7 @@ class TaskContext:
     final_qc_dir: Path
     final_qc_screenshots_dir: Path
     render_dir: Path
+    cover_dir: Path
     video_info_path: Path
     original_audio_path: Path
     zh_raw_srt_path: Path
@@ -48,7 +49,17 @@ class TaskContext:
         final_qc_dir = task_dir / "final_qc"
         final_qc_screenshots_dir = final_qc_dir / "screenshots"
         render_dir = task_dir / "render"
-        for directory in [audio_dir, subtitles_dir, reports_dir, logs_dir, screenshots_dir, final_qc_screenshots_dir, render_dir]:
+        cover_dir = task_dir / "cover"
+        for directory in [
+            audio_dir,
+            subtitles_dir,
+            reports_dir,
+            logs_dir,
+            screenshots_dir,
+            final_qc_screenshots_dir,
+            render_dir,
+            cover_dir,
+        ]:
             directory.mkdir(parents=True, exist_ok=True)
         context = cls(
             input_video=input_video,
@@ -63,6 +74,7 @@ class TaskContext:
             final_qc_dir=final_qc_dir,
             final_qc_screenshots_dir=final_qc_screenshots_dir,
             render_dir=render_dir,
+            cover_dir=cover_dir,
             video_info_path=reports_dir / "video_info.json",
             original_audio_path=audio_dir / "original.wav",
             zh_raw_srt_path=subtitles_dir / "zh_raw.srt",

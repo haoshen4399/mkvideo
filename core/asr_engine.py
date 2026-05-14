@@ -1,5 +1,9 @@
 from pathlib import Path
 from typing import Any
+import json
+import subprocess
+import sys
+import time
 
 from core.asr_quality import build_asr_quality_report
 from engines.faster_whisper_engine import transcribe_with_faster_whisper
@@ -26,6 +30,8 @@ def run_asr(context, config: dict[str, Any]) -> dict[str, Path]:
         fallback = step_config.get("fallback_engine")
         if fallback not in {"openai-whisper", "stable-ts", "whisper-timestamped"}:
             raise
+        if _looks_like_native_crash(first_error):
+            time.sleep(float(step_config.get("native_crash_fallback_delay_seconds", 8)))
         fallback_config = dict(step_config)
         fallback_config["model"] = step_config.get("fallback_model", "medium")
         fallback_config["engine"] = fallback
@@ -51,6 +57,12 @@ def run_asr(context, config: dict[str, Any]) -> dict[str, Path]:
 
 
 def _run_engine(engine: str, audio_path: Path, output_path: Path, step_config: dict[str, Any]) -> dict[str, Any]:
+    if step_config.get("isolate_process", True):
+        return _run_engine_in_subprocess(engine, audio_path, output_path, step_config)
+    return _run_engine_direct(engine, audio_path, output_path, step_config)
+
+
+def _run_engine_direct(engine: str, audio_path: Path, output_path: Path, step_config: dict[str, Any]) -> dict[str, Any]:
     if engine == "faster-whisper":
         return transcribe_with_faster_whisper(audio_path, output_path, step_config)
     if engine == "openai-whisper":
@@ -60,6 +72,107 @@ def _run_engine(engine: str, audio_path: Path, output_path: Path, step_config: d
     if engine == "whisper-timestamped":
         return transcribe_with_whisper_timestamped(audio_path, output_path, step_config)
     raise ValueError(f"Unsupported ASR engine: {engine}")
+
+
+def _run_engine_in_subprocess(engine: str, audio_path: Path, output_path: Path, step_config: dict[str, Any]) -> dict[str, Any]:
+    output_path.unlink(missing_ok=True)
+    payload = {
+        "engine": engine,
+        "audio_path": str(audio_path),
+        "output_path": str(output_path),
+        "config": {**step_config, "isolate_process": False},
+    }
+    worker = Path(__file__).with_name("asr_worker.py")
+    timeout = int(step_config.get("subprocess_timeout", step_config.get("timeout", 3600)))
+    process: subprocess.Popen[str] | None = None
+    try:
+        process = subprocess.Popen(
+            [sys.executable, str(worker)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        stdout, stderr = process.communicate(json.dumps(payload, ensure_ascii=True), timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        if process is not None:
+            _kill_process(process)
+        output_path.unlink(missing_ok=True)
+        raise RuntimeError(f"ASR subprocess timed out after {timeout}s for engine {engine}") from exc
+    except BaseException:
+        if process is not None:
+            _kill_process(process)
+        output_path.unlink(missing_ok=True)
+        raise
+    result = subprocess.CompletedProcess([sys.executable, str(worker)], process.returncode if process else -1, stdout, stderr)
+    if result.returncode != 0:
+        output_path.unlink(missing_ok=True)
+        stderr = _subprocess_error_text(result.stdout, result.stderr)
+        raise RuntimeError(f"ASR subprocess failed with exit code {result.returncode}: {stderr}")
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"ASR subprocess returned invalid JSON: {result.stdout[:1000]}") from exc
+    if not data.get("ok"):
+        raise RuntimeError(data.get("error", "ASR subprocess failed"))
+    if not output_path.exists():
+        raise RuntimeError(f"ASR subprocess completed without output file: {output_path}")
+    report = data.get("report")
+    if not isinstance(report, dict):
+        raise RuntimeError("ASR subprocess returned no report")
+    report["isolated_process"] = True
+    return report
+
+
+def _tail_text(text: str, max_lines: int = 80) -> str:
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    return "\n".join(lines[-max_lines:])
+
+
+def _subprocess_error_text(stdout: str, stderr: str) -> str:
+    summary = ""
+    try:
+        data = json.loads(stdout)
+        if isinstance(data, dict) and data.get("error"):
+            summary = str(data["error"])
+    except json.JSONDecodeError:
+        summary = stdout.strip()
+    tail = _tail_text(stderr.strip(), max_lines=40)
+    if not summary and _stderr_is_progress_only(tail):
+        return "Native ASR subprocess crash after progress output. This is usually caused by Whisper word-level timestamp alignment on Windows."
+    if summary and tail:
+        return f"{summary}\n{tail}"
+    return summary or tail
+
+
+def _stderr_is_progress_only(text: str) -> bool:
+    if not text:
+        return False
+    compact = text.replace("\r", "\n")
+    lines = [line.strip() for line in compact.splitlines() if line.strip()]
+    if not lines:
+        return False
+    return all("frames/s" in line or "%|" in line for line in lines)
+
+
+def _looks_like_native_crash(error: Exception) -> bool:
+    text = str(error).lower()
+    return "3221225477" in text or "access violation" in text or "0xc0000005" in text
+
+
+def _kill_process(process: subprocess.Popen[str]) -> None:
+    try:
+        process.kill()
+    except OSError:
+        pass
+    try:
+        process.communicate(timeout=5)
+    except Exception:
+        pass
 
 
 def _try_quality_fallback(

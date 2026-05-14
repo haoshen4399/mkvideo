@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 
@@ -53,19 +54,52 @@ def _resolve_binary(binary_name: str, config: dict | None, config_key: str, env_
     )
 
 
-def run_command(command: list[str], log_path: Path | None = None) -> subprocess.CompletedProcess[str]:
+def run_command(
+    command: list[str],
+    log_path: Path | None = None,
+    timeout: int | float | None = None,
+) -> subprocess.CompletedProcess[str]:
+    timeout = timeout or 3600
+    started = time.monotonic()
+    process: subprocess.Popen[str] | None = None
     try:
-        result = subprocess.run(command, text=True, encoding="utf-8", errors="replace", capture_output=True)
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        stdout, stderr = process.communicate(timeout=timeout)
     except FileNotFoundError as exc:
         raise FileNotFoundError(f"Executable not found while running command: {command[0]}") from exc
+    except subprocess.TimeoutExpired as exc:
+        if process is not None:
+            _kill_process(process)
+        raise FFmpegError(f"Command timed out after {timeout}s: {' '.join(command)}") from exc
+    except BaseException:
+        if process is not None:
+            _kill_process(process)
+        raise
+    result = subprocess.CompletedProcess(command, process.returncode if process else -1, stdout, stderr)
     if log_path:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write("\n$ " + " ".join(command) + "\n")
+            handle.write(f"# elapsed_seconds={time.monotonic() - started:.3f}\n")
+            handle.write(f"# return_code={result.returncode}\n")
             handle.write(result.stdout)
             handle.write(result.stderr)
     if result.returncode != 0:
-        raise FFmpegError(result.stderr.strip() or f"Command failed: {' '.join(command)}")
+        summary = _summarize_command_error(result.stderr)
+        message = f"Command failed with exit code {result.returncode}"
+        if summary:
+            message += f":\n{summary}"
+        else:
+            message += f": {' '.join(command)}"
+        raise FFmpegError(message)
     return result
 
 
@@ -88,3 +122,33 @@ def quote_filter_path(path: Path) -> str:
     text = str(path.resolve()).replace("\\", "/")
     text = text.replace(":", "\\:").replace("'", "\\'")
     return text
+
+
+def _summarize_command_error(stderr: str, max_lines: int = 20) -> str:
+    lines = [line for line in stderr.strip().splitlines() if line.strip()]
+    if not lines:
+        return ""
+    non_progress_lines = [line for line in lines if not _looks_like_ffmpeg_progress(line)]
+    interesting = [
+        line
+        for line in non_progress_lines
+        if any(token in line.lower() for token in ["error", "failed", "invalid", "unable", "cannot", "denied"])
+    ]
+    selected = interesting[-max_lines:] if interesting else non_progress_lines[-max_lines:]
+    return "\n".join(selected)
+
+
+def _looks_like_ffmpeg_progress(line: str) -> bool:
+    stripped = line.lstrip()
+    return stripped.startswith("frame=") or stripped.startswith("size=")
+
+
+def _kill_process(process: subprocess.Popen[str]) -> None:
+    try:
+        process.kill()
+    except OSError:
+        pass
+    try:
+        process.communicate(timeout=5)
+    except Exception:
+        pass
