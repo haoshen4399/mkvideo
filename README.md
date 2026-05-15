@@ -126,6 +126,29 @@ steps:
 
 OpenAI-compatible 请求通过独立 worker 执行，减少 SDK、证书、代理、导入崩溃对主进程的影响。worker 输出 JSON，主进程负责解析和报错。
 
+### 统一重试策略
+
+网络超时、连接重置、HTTP 5xx / 429 这类临时错误会按 provider 的 `max_retries` 和 `retry_backoff_seconds` 重试。步骤层也有统一重试入口，但默认不重复执行步骤：
+
+```yaml
+app:
+  step_retry:
+    max_attempts: 1
+    backoff_seconds: 2
+```
+
+单个步骤可以单独配置：
+
+```yaml
+steps:
+  translate:
+    retry:
+      max_attempts: 1
+      backoff_seconds: 2
+```
+
+重试只用于同一个操作的临时失败，不会放宽质量标准。比如翻译结果如果仍然缺条、空文本、残留中文或格式错误，流程仍会失败并写入报告。
+
 ### 字幕布局闭环
 
 `subtitle_layout_fit` 会在渲染后重新抽帧检测真实字幕位置，自动调整 ASS 坐标并重渲染，目标是让中文和英文字幕贴近但不重叠。

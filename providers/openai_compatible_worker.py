@@ -7,10 +7,11 @@ import mimetypes
 import os
 import ssl
 import sys
-import time
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+from utils.retry_utils import RetryPolicy, is_transient_error, retry_call
 
 
 faulthandler.enable()
@@ -74,18 +75,24 @@ def _chat_completion_stdlib(
         },
         method="POST",
     )
-    for attempt in range(attempts):
+    def request_once() -> str:
         try:
             with urllib.request.urlopen(request, timeout=timeout, context=_ssl_context()) as response:
                 raw = response.read().decode("utf-8", errors="replace")
             return _extract_chat_content(json.loads(raw))
         except Exception as exc:
-            if attempt >= attempts - 1:
-                raise RuntimeError(f"LLM HTTP request failed: {exc}") from exc
-            delay = retry_backoff_seconds * (2**attempt)
-            print(f"WARNING: LLM request failed, retrying in {delay:.1f}s ({attempt + 2}/{attempts})", file=sys.stderr)
-            time.sleep(delay)
-    raise RuntimeError("LLM request failed")
+            raise RuntimeError(f"LLM HTTP request failed: {exc}") from exc
+
+    return retry_call(
+        "LLM worker HTTP request",
+        RetryPolicy(max_attempts=attempts, backoff_seconds=retry_backoff_seconds),
+        request_once,
+        should_retry=is_transient_error,
+        on_retry=lambda exc, next_attempt, total_attempts, delay: print(
+            f"WARNING: LLM request failed, retrying in {delay:.1f}s ({next_attempt}/{total_attempts})",
+            file=sys.stderr,
+        ),
+    )
 
 
 def _extract_chat_content(data: dict[str, Any]) -> str:

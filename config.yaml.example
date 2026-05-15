@@ -16,6 +16,10 @@ app:
   stop_after:
   only_steps: []
   overwrite_steps: []
+  # Unified step retry. Keep max_attempts at 1 unless a step is known to be safe to rerun.
+  step_retry:
+    max_attempts: 1
+    backoff_seconds: 2
 
 llm_providers:
   default:
@@ -138,6 +142,9 @@ steps:
     target_lang: en
     strategy: understand_full_context_first
     allow_placeholder_on_failure: false
+    retry:
+      max_attempts: 1
+      backoff_seconds: 2
     overwrite: false
 
   en_check:

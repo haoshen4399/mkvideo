@@ -21,6 +21,7 @@ from core.translator import translate_subtitles
 from core.video_probe import probe_video
 from core.video_renderer import render_video
 from core.zh_ai_checker import check_zh_subtitles
+from utils.retry_utils import RetryPolicy, is_transient_error, retry_call
 
 
 class Pipeline:
@@ -136,7 +137,20 @@ class Pipeline:
         self._run_statuses[step] = "running"
         self.state.mark_running(step)
         try:
-            artifacts = self.handlers[step](self.context, self.config)
+            artifacts = retry_call(
+                f"pipeline step {step}",
+                self._retry_policy_for_step(step),
+                lambda: self.handlers[step](self.context, self.config),
+                should_retry=self._should_retry_step_error,
+                on_retry=lambda exc, next_attempt, attempts, delay: logger.warning(
+                    "Step {} failed, retrying in {:.1f}s ({}/{}): {}",
+                    step,
+                    delay,
+                    next_attempt,
+                    attempts,
+                    exc,
+                ),
+            )
         except Exception as exc:
             self._restore_forced_step_overwrite(step)
             logger.exception("Step failed: {}", step)
@@ -195,6 +209,22 @@ class Pipeline:
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
+    def _retry_policy_for_step(self, step: str) -> RetryPolicy:
+        app_retry = self.config.get("app", {}).get("step_retry", {})
+        step_retry = self.config.get("steps", {}).get(step, {}).get("retry", {})
+        merged = {**app_retry, **step_retry}
+        return RetryPolicy.from_config(
+            merged,
+            attempts_key="max_attempts",
+            retries_key="max_retries",
+            backoff_key="backoff_seconds",
+            default_attempts=1,
+            default_backoff=2.0,
+        )
+
+    def _should_retry_step_error(self, exc: Exception) -> bool:
+        return is_transient_error(exc)
+
     def _provider_config_for_step(self, step: str) -> dict[str, Any] | None:
         step_config = self.config.get("steps", {}).get(step, {})
         provider_names = [step_config.get("provider"), step_config.get("fallback_provider")]
@@ -208,6 +238,7 @@ class Pipeline:
     def _functional_step_config(self, step: str) -> dict[str, Any]:
         step_config = dict(self.config.get("steps", {}).get(step, {}))
         step_config.pop("overwrite", None)
+        step_config.pop("retry", None)
         return step_config
 
     def _prompt_hash_for_step(self, step: str) -> str | None:

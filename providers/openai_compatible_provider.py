@@ -3,13 +3,13 @@ import json
 import ssl
 import subprocess
 import sys
-import time
 import urllib.request
 from pathlib import Path
 from typing import Any
 
 from providers.llm_base import LLMProvider
 from utils.image_utils import image_to_data_url
+from utils.retry_utils import RetryPolicy, is_transient_error, retry_call
 
 
 class OpenAICompatibleProvider(LLMProvider):
@@ -45,21 +45,18 @@ class OpenAICompatibleProvider(LLMProvider):
             return self._chat_completion_stdlib(**kwargs)
         if self.client is None:
             raise RuntimeError("openai_sdk transport was selected but client was not initialized.")
-        attempts = self.max_retries + 1
-        for attempt in range(attempts):
-            try:
-                return self.client.chat.completions.create(**kwargs)
-            except Exception:
-                if attempt >= attempts - 1:
-                    raise
-                delay = self.retry_backoff_seconds * (2**attempt)
-                _warn(
-                    "LLM request failed, retrying in {:.1f}s ({}/{})",
-                    delay,
-                    attempt + 2,
-                    attempts,
-                )
-                time.sleep(delay)
+        return retry_call(
+            "LLM SDK request",
+            RetryPolicy(max_attempts=self.max_retries + 1, backoff_seconds=self.retry_backoff_seconds),
+            lambda: self.client.chat.completions.create(**kwargs),
+            should_retry=is_transient_error,
+            on_retry=lambda exc, next_attempt, attempts, delay: _warn(
+                "LLM request failed, retrying in {:.1f}s ({}/{})",
+                delay,
+                next_attempt,
+                attempts,
+            ),
+        )
 
     def _chat_completion_stdlib(self, **kwargs: Any) -> str:
         attempts = self.max_retries + 1
@@ -76,23 +73,27 @@ class OpenAICompatibleProvider(LLMProvider):
             },
             method="POST",
         )
-        for attempt in range(attempts):
+        def request_once() -> str:
             try:
                 with urllib.request.urlopen(request, timeout=timeout, context=_ssl_context()) as response:
                     raw = response.read().decode("utf-8", errors="replace")
                 data = json.loads(raw)
                 return _extract_chat_content(data)
             except Exception as exc:
-                if attempt >= attempts - 1:
-                    raise RuntimeError(f"LLM HTTP request failed: {exc}") from exc
-                delay = self.retry_backoff_seconds * (2**attempt)
-                _warn(
-                    "LLM request failed, retrying in {:.1f}s ({}/{})",
-                    delay,
-                    attempt + 2,
-                    attempts,
-                )
-                time.sleep(delay)
+                raise RuntimeError(f"LLM HTTP request failed: {exc}") from exc
+
+        return retry_call(
+            "LLM HTTP request",
+            RetryPolicy(max_attempts=attempts, backoff_seconds=self.retry_backoff_seconds),
+            request_once,
+            should_retry=is_transient_error,
+            on_retry=lambda exc, next_attempt, total_attempts, delay: _warn(
+                "LLM request failed, retrying in {:.1f}s ({}/{})",
+                delay,
+                next_attempt,
+                total_attempts,
+            ),
+        )
 
     def complete(self, prompt: str, model: str | None = None) -> str:
         if self.config.get("isolate_process", True):
